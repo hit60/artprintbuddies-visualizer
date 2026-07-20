@@ -3,12 +3,12 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 import os
-import base64
+import io
 
 # Set up page layout
 st.set_page_config(page_title="ArtPrintBuddies Visualizer", layout="wide")
 
-# Custom CSS to force clean mobile stacking and responsive uncropped preview boxes
+# Custom CSS to force clean mobile stacking and button hover actions
 st.markdown("""
     <style>
     /* Break side-by-side layout into single columns on small screen viewports */
@@ -21,15 +21,6 @@ st.markdown("""
         }
     }
     
-    /* Completely unlock the iframe frame container to scale natively without clipping lines */
-    iframe {
-        width: 100% !important;
-        height: auto !important;
-        border: 2px solid #e6e9ef;
-        border-radius: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    }
-    
     div[data-testid="stHorizontalBlock"] button {
         border-radius: 8px;
         padding: 8px;
@@ -38,6 +29,11 @@ st.markdown("""
     div[data-testid="stHorizontalBlock"] button:hover {
         transform: scale(1.02);
         border: 2px solid #0066cc;
+    }
+    
+    /* Make the slider element look nice and prominent */
+    div[data-element-to-test="stMarkdownContainer"] {
+        font-weight: 500;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -127,12 +123,6 @@ def load_classified_catalog():
         }
     }
 
-def get_base64_image(img):
-    import io
-    buffered = io.BytesIO()
-    img.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode()
-
 # --- MAIN SCREEN: UPLOAD WALL ---
 uploaded_wall = st.file_uploader("1. 上傳牆面照片 / Upload your wall photo", type=["jpg", "jpeg", "png", "webp"])
 st.caption("🔒 **隱私安全保障 / Your Privacy Matters:** 上傳的照片僅用於即時效果預覽。")
@@ -141,6 +131,7 @@ if uploaded_wall:
     raw_wall_img = Image.open(uploaded_wall).convert("RGBA")
     wall_img = ImageOps.exif_transpose(raw_wall_img)
     
+    # Scale width down gently to save processing memory while keeping native vertical layout intact
     if wall_img.width > MAX_IMAGE_WIDTH:
         w_percent = MAX_IMAGE_WIDTH / float(wall_img.width)
         h_size = int(float(wall_img.height) * float(w_percent))
@@ -183,163 +174,73 @@ if uploaded_wall:
         st.subheader("👁️ 預覽與調整 / Preview & Adjust")
         
         if not st.session_state.selected_art_path:
+            # Displays natively through Streamlit without any framework cropping rules
             st.image(wall_img, use_container_width=True)
-            st.info("👈 請在上方或左側選單點擊裝飾畫圖片，以進行效果預覽！")
+            st.info("👈 請在左側選單點擊裝飾畫圖片，以進行效果預覽！")
         else:
             decor_path = st.session_state.selected_art_path
             if os.path.exists(decor_path):
                 decor_img = Image.open(decor_path).convert("RGBA")
+                
+                st.write("🛠️ **調整畫作位置與大小 / Controls:**")
+                
+                # Dynamic adjustment sliders powered completely natively by Streamlit backend
+                col_x, col_y = st.columns(2)
+                with col_x:
+                    pos_x = st.slider("左右位置 (X Position)", 0, wall_img.width, int(wall_img.width / 3))
+                with col_y:
+                    pos_y = st.slider("上下位置 (Y Position)", 0, wall_img.height, int(wall_img.height / 3))
+                    
+                scale_percent = st.slider("尺寸大小 (Scale Size %)", 10, 100, 30)
+
+                # Use Python logic to blend the images safely 
+                # Calculate new sizes based on user sliders
+                new_w = int(wall_img.width * (scale_percent / 100.0))
                 aspect_ratio = decor_img.height / decor_img.width
+                new_h = int(new_w * aspect_ratio)
                 
-                init_x = int(wall_img.width / 3)
-                init_y = int(wall_img.height / 3)
-                init_w = int(wall_img.width / 4)
-
-                wall_b64 = get_base64_image(wall_img)
-                decor_b64 = get_base64_image(decor_img)
-
-                # --- EMBEDDED PREVIEW WINDOW WITH INNER FRAME AUTO-RESIZING INTERPOLATION ---
-                html_code = f"""
-                <div id="visualizer-container" style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 15px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box; padding: 5px; overflow: hidden;">
-                    <canvas id="canvas" style="width: 100%; max-width: 100%; height: auto; aspect-ratio: {wall_img.width}/{wall_img.height}; background: #fafafa; border-radius: 8px; touch-action: none; border: 1px solid #ddd; box-sizing: border-box; display: block;"></canvas>
-                    
-                    <button id="dlBtn" style="width: 100%; background-color: #ff4b4b; color: white; border: none; padding: 14px 24px; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: background 0.2s;">
-                        💾 下載我的設計 / Download Room Design
-                    </button>
-                </div>
-
-                <script>
-                    const canvas = document.getElementById('canvas');
-                    const ctx = canvas.getContext('2d');
-                    const dlBtn = document.getElementById('dlBtn');
-                    const container = document.getElementById('visualizer-container');
-                    
-                    const wallImg = new Image();
-                    const artImg = new Image();
-                    
-                    wallImg.src = "data:image/png;base64,{wall_b64}";
-                    artImg.src = "data:image/png;base64,{decor_b64}";
-                    
-                    let art = {{
-                        x: {init_x},
-                        y: {init_y},
-                        w: {init_w},
-                        h: Math.round({init_w} * {aspect_ratio})
-                    }};
-                    
-                    let isDragging = false;
-                    let startX, startY;
-                    let initTouchDist = 0;
-                    let initArtW = 0;
-                    
-                    // Frontend Streamlit frame auto-sizing watcher loop
-                    function sendHeightToStreamlit() {{
-                        const currentHeight = container.getBoundingClientRect().height;
-                        parent.postMessage({{
-                            type: 'streamlit:setFrameHeight',
-                            height: currentHeight + 20
-                        }}, '*');
-                    }}
-
-                    // Continuously recalculate frame bounds when elements render or windows scale
-                    const resizeObserver = new ResizeObserver(() => sendHeightToStreamlit());
-                    resizeObserver.observe(container);
-                    
-                    function draw() {{
-                        canvas.width = wallImg.width;
-                        canvas.height = wallImg.height;
-                        ctx.drawImage(wallImg, 0, 0);
-                        ctx.drawImage(artImg, art.x, art.y, art.w, art.h);
-                        sendHeightToStreamlit();
-                    }}
-                    
-                    function getCoordinates(clientX, clientY) {{
-                        const rect = canvas.getBoundingClientRect();
-                        return {{
-                            x: ((clientX - rect.left) / rect.width) * canvas.width,
-                            y: ((clientY - rect.top) / rect.height) * canvas.height
-                        }};
-                    }}
-                    
-                    function startAction(clientX, clientY) {{
-                        const coord = getCoordinates(clientX, clientY);
-                        if (coord.x >= art.x && coord.x <= art.x + art.w && coord.y >= art.y && coord.y <= art.y + art.h) {{
-                            isDragging = true;
-                            startX = coord.x - art.x;
-                            startY = coord.y - art.y;
-                        }}
-                    }}
-                    
-                    function moveAction(clientX, clientY) {{
-                        if (!isDragging) return;
-                        const coord = getCoordinates(clientX, clientY);
-                        art.x = coord.x - startX;
-                        art.y = coord.y - startY;
-                        draw();
-                    }}
-                    
-                    function getTouchDist(touches) {{
-                        const dx = touches[0].clientX - touches[1].clientX;
-                        const dy = touches[0].clientY - touches[1].clientY;
-                        return Math.sqrt(dx*dx + dy*dy);
-                    }}
-                    
-                    canvas.addEventListener('mousedown', (e) => startAction(e.clientX, e.clientY));
-                    window.addEventListener('mousemove', (e) => moveAction(e.clientX, e.clientY));
-                    window.addEventListener('mouseup', () => isDragging = false);
-                    
-                    canvas.addEventListener('touchstart', (e) => {{
-                        if (e.touches.length === 1) {{
-                            startAction(e.touches[0].clientX, e.touches[0].clientY);
-                        }} else if (e.touches.length === 2) {{
-                            isDragging = false;
-                            initTouchDist = getTouchDist(e.touches);
-                            initArtW = art.w;
-                        }}
-                    }}, {{ passive: false }});
-                    
-                    window.addEventListener('touchmove', (e) => {{
-                        if (e.touches.length === 1 && isDragging) {{
-                            moveAction(e.touches[0].clientX, e.touches[0].clientY);
-                            e.preventDefault();
-                        }} else if (e.touches.length === 2) {{
-                            const currentDist = getTouchDist(e.touches);
-                            const scale = currentDist / initTouchDist;
-                            art.w = Math.max(50, Math.min(wallImg.width, Math.round(initArtW * scale)));
-                            art.h = Math.round(art.w * {aspect_ratio});
-                            draw();
-                            e.preventDefault();
-                        }}
-                    }}, {{ passive: false }});
-                    
-                    window.addEventListener('touchend', () => {{ isDragging = false; }});
-                    
-                    canvas.addEventListener('wheel', (e) => {{
-                        e.preventDefault();
-                        const scaleFactor = e.deltaY < 0 ? 1.05 : 0.95;
-                        art.w = Math.max(50, Math.min(wallImg.width, Math.round(art.w * scaleFactor)));
-                        art.h = Math.round(art.w * {aspect_ratio});
-                        draw();
-                    }}, {{ passive: false }});
-                    
-                    dlBtn.addEventListener('click', () => {{
-                        const link = document.createElement('a');
-                        link.download = 'artprintbuddies_design.png';
-                        link.href = canvas.toDataURL('image/png');
-                        link.click();
-                    }});
-                    
-                    wallImg.onload = () => {{ artImg.onload = () => {{ draw(); sendHeightToStreamlit(); }}; }};
-                </script>
-                """
+                resized_decor = decor_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 
-                import streamlit.components.v1 as components
+                # Make a workspace copy of our base wall image
+                combined_preview = wall_img.copy()
                 
-                # Height is initially set to a default fallback; JavaScript overrides it immediately
-                components.html(html_code, height=500, scrolling=False)
+                # Safeguard clipping bounding box coordinates to keep layers safely on image canvas
+                x_start = max(0, pos_x)
+                y_start = max(0, pos_y)
+                x_end = min(wall_img.width, x_start + new_w)
+                y_end = min(wall_img.height, y_start + new_h)
                 
+                # Calculate crop size for art if it hangs off the background edge boundaries
+                decor_w_crop = x_end - x_start
+                decor_h_crop = y_end - y_start
+                
+                if decor_w_crop > 0 and decor_h_crop > 0:
+                    cropped_decor = resized_decor.crop((0, 0, decor_w_crop, decor_h_crop))
+                    # Alpha compositing blend execution loop
+                    combined_preview.alpha_composite(cropped_decor, (x_start, y_start))
+                
+                # Render the combined composition natively without an iframe wrapper
+                st.image(combined_preview, use_container_width=True)
                 st.markdown(f"**當前選定 / Selected:** `{st.session_state.selected_art_name}`")
                 
+                # Turn image matrix into file data streams for the download button
+                img_buffer = io.BytesIO()
+                # Convert back to RGB for crisp JPEG exports
+                final_rgb = combined_preview.convert("RGB")
+                final_rgb.save(img_buffer, format="JPEG", quality=95)
+                byte_data = img_buffer.getvalue()
+                
+                # Standard Streamlit Download Button - Always 100% visible, cannot be hidden!
+                st.download_button(
+                    label="💾 下載我的設計 / Download Room Design",
+                    data=byte_data,
+                    file_name="artprintbuddies_design.jpg",
+                    mime="image/jpeg",
+                    use_container_width=True,
+                    type="primary"
+                )
+                
+                st.write("") # Spacer row
                 if st.button("🔄 試試其他牆面 / Try Another Photo", use_container_width=True):
                     for key in ["selected_art_path", "selected_art_name"]:
                         if key in st.session_state: del st.session_state[key]
