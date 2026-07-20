@@ -1,7 +1,7 @@
 import streamlit as st
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps  # 💡 引入 ImageOps 來處理手機照片方向問題
 import os
 
 # Set up page layout
@@ -122,6 +122,10 @@ st.caption("🔒 **隱私安全保障 / Your Privacy Matters:** 上傳的照片�
 
 if uploaded_wall:
     wall_img = Image.open(uploaded_wall).convert("RGBA")
+    
+    # 💡 關鍵修正點：自動修正手機照片的 EXIF 方向旋轉
+    wall_img = ImageOps.exif_transpose(wall_img)
+    
     if wall_img.width > MAX_IMAGE_WIDTH:
         w_percent = MAX_IMAGE_WIDTH / float(wall_img.width)
         h_size = int(float(wall_img.height) * float(w_percent))
