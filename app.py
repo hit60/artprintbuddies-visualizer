@@ -1,4 +1,3 @@
-
 import io
 import os
 import cv2
@@ -139,6 +138,7 @@ def load_classified_catalog():
 uploaded_wall = st.file_uploader(
     "1. 上傳牆面照片 / Upload your wall photo",
     type=["jpg", "jpeg", "png", "webp"],
+    max_upload_size=3,  # Sets 3MB limit in UI widget
 )
 st.caption("🔒 **隱私安全保障 / Your Privacy Matters:** 上傳的照片僅用於即時效果預覽。")
 
@@ -192,7 +192,7 @@ if uploaded_wall:
                         for col_idx, (art_name, art_path) in enumerate(row_items):
                             with cols[col_idx]:
                                 if os.path.exists(art_path):
-                                    # Pass file path directly to st.image to prevent RAM memory leaks
+                                    # Pass file path directly to st.image to prevent RAM leaks
                                     st.image(
                                         art_path, use_container_width=True
                                     )
