@@ -21,10 +21,11 @@ st.markdown("""
         }
     }
     
-    /* Make the interactive drawing canvas iframe frame take maximum available width */
+    /* Let the canvas container frame auto-scale based on content rather than forcing a short viewport */
     iframe {
         width: 100% !important;
-        height: 62vh !important;
+        height: auto !important;
+        min-height: 500px;
         border: 2px solid #e6e9ef;
         border-radius: 12px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.08);
@@ -191,7 +192,7 @@ if uploaded_wall:
                 decor_img = Image.open(decor_path).convert("RGBA")
                 aspect_ratio = decor_img.height / decor_img.width
                 
-                # Starting defaults inside HTML sandbox directly
+                # Dynamic calculated parameters
                 init_x = int(wall_img.width / 3)
                 init_y = int(wall_img.height / 3)
                 init_w = int(wall_img.width / 4)
@@ -199,17 +200,16 @@ if uploaded_wall:
                 wall_b64 = get_base64_image(wall_img)
                 decor_b64 = get_base64_image(decor_img)
                 
-                # --- WIDESCREEN CONTAINER WITH INTEGRATED CANVAS DOWNLOAD SYSTEM ---
+                # Calculate direct display layout heights safely based on real upload bounds
+                calculated_iframe_height = int(500 * (wall_img.height / wall_img.width))
+                iframe_height_setting = max(calculated_iframe_height + 80, 560)
+
+                # --- LARGE HIGH-RES INTERACTIVE CANVAS WITH INTEGRATED DOWNLOADER ---
                 html_code = f"""
                 <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 15px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                    <canvas id="canvas" style="width: 100%; height: 48vh; object-fit: contain; background: #fafafa; border-radius: 8px; touch-action: none; border: 1px solid #ddd;"></canvas>
+                    <canvas id="canvas" style="width: 100%; max-width: 100%; height: auto; aspect-ratio: {wall_img.width}/{wall_img.height}; object-fit: contain; background: #fafafa; border-radius: 8px; touch-action: none; border: 1px solid #ddd;"></canvas>
                     
-                    <div style="width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 5px;">
-                        <label style="font-size: 0.9rem; color: #333; font-weight: 500;">🎨 環境光線融和度 (Opacity): <span id="opVal">95%</span></label>
-                        <input type="range" id="opacitySlider" min="50" max="100" value="95" style="width: 100%; margin-bottom: 15px; cursor: pointer;">
-                    </div>
-
-                    <button id="dlBtn" style="width: 100%; background-color: #ff4b4b; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: background 0.2s;">
+                    <button id="dlBtn" style="width: 100%; background-color: #ff4b4b; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: background 0.2s; margin-top: 5px;">
                         💾 下載我的設計 / Download Room Design
                     </button>
                 </div>
@@ -217,8 +217,6 @@ if uploaded_wall:
                 <script>
                     const canvas = document.getElementById('canvas');
                     const ctx = canvas.getContext('2d');
-                    const opSlider = document.getElementById('opacitySlider');
-                    const opValLabel = document.getElementById('opVal');
                     const dlBtn = document.getElementById('dlBtn');
                     
                     const wallImg = new Image();
@@ -231,8 +229,7 @@ if uploaded_wall:
                         x: {init_x},
                         y: {init_y},
                         w: {init_w},
-                        h: Math.round({init_w} * {aspect_ratio}),
-                        opacity: 0.95
+                        h: Math.round({init_w} * {aspect_ratio})
                     }};
                     
                     let isDragging = false;
@@ -244,9 +241,7 @@ if uploaded_wall:
                         canvas.width = wallImg.width;
                         canvas.height = wallImg.height;
                         ctx.drawImage(wallImg, 0, 0);
-                        ctx.globalAlpha = art.opacity;
                         ctx.drawImage(artImg, art.x, art.y, art.w, art.h);
-                        ctx.globalAlpha = 1.0;
                     }}
                     
                     function getCoordinates(clientX, clientY) {{
@@ -280,19 +275,12 @@ if uploaded_wall:
                         return Math.sqrt(dx*dx + dy*dy);
                     }}
                     
-                    // Sliders interaction
-                    opSlider.addEventListener('input', (e) => {{
-                        art.opacity = parseInt(e.target.value) / 100;
-                        opValLabel.innerText = e.target.value + "%";
-                        draw();
-                    }});
-                    
-                    // Mouse listeners
+                    // Desktop Mouse listeners
                     canvas.addEventListener('mousedown', (e) => startAction(e.clientX, e.clientY));
                     window.addEventListener('mousemove', (e) => moveAction(e.clientX, e.clientY));
                     window.addEventListener('mouseup', () => isDragging = false);
                     
-                    // Mobile Touch handlers (Drag & pinch-to-zoom tracking)
+                    // Touch handlers (Drag & pinch zoom tracking controls)
                     canvas.addEventListener('touchstart', (e) => {{
                         if (e.touches.length === 1) {{
                             startAction(e.touches[0].clientX, e.touches[0].clientY);
@@ -328,7 +316,7 @@ if uploaded_wall:
                         draw();
                     }}, {{ passive: false }});
                     
-                    // Direct Canvas Export Downloader Action Link
+                    // Direct Canvas Export Download Action
                     dlBtn.addEventListener('click', () => {{
                         const link = document.createElement('a');
                         link.download = 'artprintbuddies_design.png';
@@ -341,7 +329,7 @@ if uploaded_wall:
                 """
                 
                 import streamlit.components.v1 as components
-                components.html(html_code, height=540, scrolling=False)
+                components.html(html_code, height=iframe_height_setting, scrolling=False)
                 
                 st.markdown(f"**當前選定 / Selected:** `{st.session_state.selected_art_name}`")
                 
