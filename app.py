@@ -4,7 +4,6 @@ import numpy as np
 from PIL import Image, ImageOps
 import os
 import base64
-import json
 
 # Set up page layout
 st.set_page_config(page_title="ArtPrintBuddies Visualizer", layout="wide")
@@ -25,7 +24,7 @@ st.markdown("""
     /* Make the interactive drawing canvas iframe frame take maximum available width */
     iframe {
         width: 100% !important;
-        height: 55vh !important;
+        height: 62vh !important;
         border: 2px solid #e6e9ef;
         border-radius: 12px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.08);
@@ -42,14 +41,6 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-
-# Initialize touch positions in session state if they don't exist
-if "canvas_x" not in st.session_state:
-    st.session_state.canvas_x = None
-if "canvas_y" not in st.session_state:
-    st.session_state.canvas_y = None
-if "canvas_w" not in st.session_state:
-    st.session_state.canvas_w = None
 
 # --- BRANDING & SIDEBAR COMPANY DETAILS ---
 with st.sidebar:
@@ -186,12 +177,6 @@ if uploaded_wall:
                                     if st.button(button_label, key=f"btn_{cat_name}_{art_path}_{row_idx}_{col_idx}", use_container_width=True):
                                         st.session_state.selected_art_path = art_path
                                         st.session_state.selected_art_name = art_name
-                                        
-                                        # Reset positions to defaults on new selection
-                                        st.session_state.canvas_x = int(wall_img.width / 3)
-                                        st.session_state.canvas_y = int(wall_img.height / 3)
-                                        st.session_state.canvas_w = int(wall_img.width / 4)
-                                        st.session_state.wall_op_slider = 0.95
                                         st.rerun()
 
     with col_canvas:
@@ -206,27 +191,35 @@ if uploaded_wall:
                 decor_img = Image.open(decor_path).convert("RGBA")
                 aspect_ratio = decor_img.height / decor_img.width
                 
-                # Base layout dynamic calculations fallback
-                if st.session_state.canvas_x is None:
-                    st.session_state.canvas_x = int(wall_img.width / 3)
-                if st.session_state.canvas_y is None:
-                    st.session_state.canvas_y = int(wall_img.height / 3)
-                if st.session_state.canvas_w is None:
-                    st.session_state.canvas_w = int(wall_img.width / 4)
-                
-                current_op = st.session_state.get("wall_op_slider", 0.95)
+                # Starting defaults inside HTML sandbox directly
+                init_x = int(wall_img.width / 3)
+                init_y = int(wall_img.height / 3)
+                init_w = int(wall_img.width / 4)
 
                 wall_b64 = get_base64_image(wall_img)
                 decor_b64 = get_base64_image(decor_img)
                 
-                # --- WIDESCREEN TOUCH INTERACTIVE CONTAINER WITH POSTMESSAGE SYNC ---
+                # --- WIDESCREEN CONTAINER WITH INTEGRATED CANVAS DOWNLOAD SYSTEM ---
                 html_code = f"""
-                <div style="width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; display: flex; justify-content: center; align-items: center;">
-                    <canvas id="canvas" style="width: 100%; height: 50vh; object-fit: contain; background: #fafafa; border-radius: 8px; touch-action: none;"></canvas>
+                <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 15px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                    <canvas id="canvas" style="width: 100%; height: 48vh; object-fit: contain; background: #fafafa; border-radius: 8px; touch-action: none; border: 1px solid #ddd;"></canvas>
+                    
+                    <div style="width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 5px;">
+                        <label style="font-size: 0.9rem; color: #333; font-weight: 500;">🎨 環境光線融和度 (Opacity): <span id="opVal">95%</span></label>
+                        <input type="range" id="opacitySlider" min="50" max="100" value="95" style="width: 100%; margin-bottom: 15px; cursor: pointer;">
+                    </div>
+
+                    <button id="dlBtn" style="width: 100%; background-color: #ff4b4b; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: background 0.2s;">
+                        💾 下載我的設計 / Download Room Design
+                    </button>
                 </div>
+
                 <script>
                     const canvas = document.getElementById('canvas');
                     const ctx = canvas.getContext('2d');
+                    const opSlider = document.getElementById('opacitySlider');
+                    const opValLabel = document.getElementById('opVal');
+                    const dlBtn = document.getElementById('dlBtn');
                     
                     const wallImg = new Image();
                     const artImg = new Image();
@@ -235,11 +228,11 @@ if uploaded_wall:
                     artImg.src = "data:image/png;base64,{decor_b64}";
                     
                     let art = {{
-                        x: {st.session_state.canvas_x},
-                        y: {st.session_state.canvas_y},
-                        w: {st.session_state.canvas_w},
-                        h: Math.round({st.session_state.canvas_w} * {aspect_ratio}),
-                        opacity: {current_op}
+                        x: {init_x},
+                        y: {init_y},
+                        w: {init_w},
+                        h: Math.round({init_w} * {aspect_ratio}),
+                        opacity: 0.95
                     }};
                     
                     let isDragging = false;
@@ -262,14 +255,6 @@ if uploaded_wall:
                             x: ((clientX - rect.left) / rect.width) * canvas.width,
                             y: ((clientY - rect.top) / rect.height) * canvas.height
                         }};
-                    }}
-                    
-                    function sendDataToStreamlit() {{
-                        // Safely transmit coordinates back to Python state session
-                        window.parent.postMessage({{
-                            type: 'streamlit:setComponentValue',
-                            value: JSON.stringify({{x: Math.round(art.x), y: Math.round(art.y), w: Math.round(art.w)}})
-                        }}, '*');
                     }}
                     
                     function startAction(clientX, clientY) {{
@@ -295,14 +280,19 @@ if uploaded_wall:
                         return Math.sqrt(dx*dx + dy*dy);
                     }}
                     
-                    // Mouse Bindings
-                    canvas.addEventListener('mousedown', (e) => startAction(e.clientX, e.clientY));
-                    window.addEventListener('mousemove', (e) => moveAction(e.clientX, e.clientY));
-                    window.addEventListener('mouseup', () => {{
-                        if(isDragging) {{ isDragging = false; sendDataToStreamlit(); }}
+                    // Sliders interaction
+                    opSlider.addEventListener('input', (e) => {{
+                        art.opacity = parseInt(e.target.value) / 100;
+                        opValLabel.innerText = e.target.value + "%";
+                        draw();
                     }});
                     
-                    // Touch Handlers with End-of-action Sync Hooks
+                    // Mouse listeners
+                    canvas.addEventListener('mousedown', (e) => startAction(e.clientX, e.clientY));
+                    window.addEventListener('mousemove', (e) => moveAction(e.clientX, e.clientY));
+                    window.addEventListener('mouseup', () => isDragging = false);
+                    
+                    // Mobile Touch handlers (Drag & pinch-to-zoom tracking)
                     canvas.addEventListener('touchstart', (e) => {{
                         if (e.touches.length === 1) {{
                             startAction(e.touches[0].clientX, e.touches[0].clientY);
@@ -327,73 +317,38 @@ if uploaded_wall:
                         }}
                     }}, {{ passive: false }});
                     
-                    window.addEventListener('touchend', () => {{ 
-                        isDragging = false; 
-                        sendDataToStreamlit(); 
-                    }});
+                    window.addEventListener('touchend', () => {{ isDragging = false; }});
                     
-                    // Mouse Scroll Wheel Resizing Feature
+                    // Wheel fallback zoom 
                     canvas.addEventListener('wheel', (e) => {{
                         e.preventDefault();
                         const scaleFactor = e.deltaY < 0 ? 1.05 : 0.95;
                         art.w = Math.max(50, Math.min(wallImg.width, Math.round(art.w * scaleFactor)));
                         art.h = Math.round(art.w * {aspect_ratio});
                         draw();
-                        sendDataToStreamlit();
                     }}, {{ passive: false }});
+                    
+                    // Direct Canvas Export Downloader Action Link
+                    dlBtn.addEventListener('click', () => {{
+                        const link = document.createElement('a');
+                        link.download = 'artprintbuddies_design.png';
+                        link.href = canvas.toDataURL('image/png');
+                        link.click();
+                    }});
                     
                     wallImg.onload = () => {{ artImg.onload = () => {{ draw(); }}; }};
                 </script>
                 """
                 
                 import streamlit.components.v1 as components
-                # Capture values sent from JS component back into Python
-                raw_received = components.html(html_code, height=480, scrolling=False)
+                components.html(html_code, height=540, scrolling=False)
                 
-                # If user moved it on screen, instantly override the current python tracking state
-                if raw_received is not None:
-                    try:
-                        coords = json.loads(raw_received)
-                        st.session_state.canvas_x = coords.get("x", st.session_state.canvas_x)
-                        st.session_state.canvas_y = coords.get("y", st.session_state.canvas_y)
-                        st.session_state.canvas_w = coords.get("w", st.session_state.canvas_w)
-                    except:
-                        pass
-
-                st.markdown("### ⚙️ 調整工具 / Position Controls")
                 st.markdown(f"**當前選定 / Selected:** `{st.session_state.selected_art_name}`")
                 
-                # Environment Lighting opacity slider control 
-                opacity = st.slider("環境光線融和度 (Opacity)", 0.5, 1.0, value=current_op, step=0.05, key="wall_op_slider")
-                
-                # Process final export cleanly using matching finger canvas values
-                final_x = st.session_state.canvas_x
-                final_y = st.session_state.canvas_y
-                final_w = st.session_state.canvas_w
-                final_h = int(final_w * aspect_ratio)
-                
-                decor_resized = decor_img.resize((final_w, final_h), Image.Resampling.LANCZOS)
-                if opacity < 1.0:
-                    alpha = decor_resized.split()[3].point(lambda p: p * opacity)
-                    decor_resized.putalpha(alpha)
-                
-                preview_canvas = wall_img.copy()
-                preview_canvas.paste(decor_resized, (final_x, final_y), decor_resized)
-                
-                col_down, col_reset = st.columns(2)
-                with col_down:
-                    st.download_button(
-                        label="💾 下載我的設計 / Download Room Design",
-                        data=cv2.imencode('.png', cv2.cvtColor(np.array(preview_canvas), cv2.COLOR_RGBA2BGRA))[1].tobytes(),
-                        file_name="artprintbuddies_design.png",
-                        mime="image/png",
-                        use_container_width=True
-                    )
-                with col_reset:
-                    if st.button("🔄 試試其他牆面 / Try Another Photo", use_container_width=True):
-                        for key in ["selected_art_path", "selected_art_name", "canvas_x", "canvas_y", "canvas_w", "wall_op_slider"]:
-                            if key in st.session_state: del st.session_state[key]
-                        st.rerun()
+                if st.button("🔄 試試其他牆面 / Try Another Photo", use_container_width=True):
+                    for key in ["selected_art_path", "selected_art_name"]:
+                        if key in st.session_state: del st.session_state[key]
+                    st.rerun()
 
 # --- FOOTER WITH COPYRIGHT & SHOPIFY BUTTON ---
 st.markdown("---")
