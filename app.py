@@ -198,9 +198,9 @@ if uploaded_wall:
                 wall_b64 = get_base64_image(wall_img)
                 decor_b64 = get_base64_image(decor_img)
 
-                # --- UNCACHED NATIVE SCALE RATIO INTERACTIVE CONTAINER WINDOW ---
+                # --- EMBEDDED PREVIEW WINDOW WITH INNER FRAME AUTO-RESIZING INTERPOLATION ---
                 html_code = f"""
-                <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 15px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box; padding: 5px;">
+                <div id="visualizer-container" style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 15px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box; padding: 5px; overflow: hidden;">
                     <canvas id="canvas" style="width: 100%; max-width: 100%; height: auto; aspect-ratio: {wall_img.width}/{wall_img.height}; background: #fafafa; border-radius: 8px; touch-action: none; border: 1px solid #ddd; box-sizing: border-box; display: block;"></canvas>
                     
                     <button id="dlBtn" style="width: 100%; background-color: #ff4b4b; color: white; border: none; padding: 14px 24px; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: background 0.2s;">
@@ -212,6 +212,7 @@ if uploaded_wall:
                     const canvas = document.getElementById('canvas');
                     const ctx = canvas.getContext('2d');
                     const dlBtn = document.getElementById('dlBtn');
+                    const container = document.getElementById('visualizer-container');
                     
                     const wallImg = new Image();
                     const artImg = new Image();
@@ -231,11 +232,25 @@ if uploaded_wall:
                     let initTouchDist = 0;
                     let initArtW = 0;
                     
+                    // Frontend Streamlit frame auto-sizing watcher loop
+                    function sendHeightToStreamlit() {{
+                        const currentHeight = container.getBoundingClientRect().height;
+                        parent.postMessage({{
+                            type: 'streamlit:setFrameHeight',
+                            height: currentHeight + 20
+                        }}, '*');
+                    }}
+
+                    // Continuously recalculate frame bounds when elements render or windows scale
+                    const resizeObserver = new ResizeObserver(() => sendHeightToStreamlit());
+                    resizeObserver.observe(container);
+                    
                     function draw() {{
                         canvas.width = wallImg.width;
                         canvas.height = wallImg.height;
                         ctx.drawImage(wallImg, 0, 0);
                         ctx.drawImage(artImg, art.x, art.y, art.w, art.h);
+                        sendHeightToStreamlit();
                     }}
                     
                     function getCoordinates(clientX, clientY) {{
@@ -314,21 +329,14 @@ if uploaded_wall:
                         link.click();
                     }});
                     
-                    wallImg.onload = () => {{ artImg.onload = () => {{ draw(); }}; }};
+                    wallImg.onload = () => {{ artImg.onload = () => {{ draw(); sendHeightToStreamlit(); }}; }};
                 </script>
                 """
                 
                 import streamlit.components.v1 as components
                 
-                # Dynamic height tracking calculation formula
-                # Allocates space based on image layout scale + 90px extra headroom buffer for buttons
-                wall_ratio = wall_img.height / wall_img.width
-                calculated_height = int((600 * wall_ratio) + 90)
-                
-                # Hard limit bounding range to avoid infinite structural sizing issues
-                final_height = max(450, min(calculated_height, 900))
-                
-                components.html(html_code, height=final_height, scrolling=False)
+                # Height is initially set to a default fallback; JavaScript overrides it immediately
+                components.html(html_code, height=500, scrolling=False)
                 
                 st.markdown(f"**當前選定 / Selected:** `{st.session_state.selected_art_name}`")
                 
