@@ -4,19 +4,19 @@ import numpy as np
 from PIL import Image, ImageOps
 import os
 import base64
-import json
 
 # Set up page layout
 st.set_page_config(page_title="ArtPrintBuddies Visualizer", layout="wide")
 
-# Custom CSS to force responsiveness
+# Custom CSS to force clean responsiveness and eliminate layout padding
 st.markdown("""
     <style>
-    /* Ensure the iframe/canvas fits nicely within the screen height */
     iframe {
-        max-height: 50vh !important;
-        border: 1px solid #ddd;
-        border-radius: 8px;
+        width: 100% !important;
+        height: 50vh !important;
+        border: 2px solid #e6e9ef;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
     div[data-testid="stHorizontalBlock"] button {
         border-radius: 8px;
@@ -165,7 +165,6 @@ if uploaded_wall:
                                     if st.button(button_label, key=f"btn_{cat_name}_{art_path}_{row_idx}_{col_idx}", use_container_width=True):
                                         st.session_state.selected_art_path = art_path
                                         st.session_state.selected_art_name = art_name
-                                        # Reset position values on item switch
                                         st.session_state.wall_x_slider = int(wall_img.width / 3)
                                         st.session_state.wall_y_slider = int(wall_img.height / 3)
                                         st.session_state.wall_w_slider = int(wall_img.width / 4)
@@ -183,22 +182,20 @@ if uploaded_wall:
             if os.path.exists(decor_path):
                 decor_img = Image.open(decor_path).convert("RGBA")
                 
-                # Fetch baseline adjustments cleanly from session cache
+                # Baseline dynamic positions
                 current_x = st.session_state.get("wall_x_slider", int(wall_img.width / 3))
                 current_y = st.session_state.get("wall_y_slider", int(wall_img.height / 3))
                 current_w = st.session_state.get("wall_w_slider", int(wall_img.width / 4))
                 current_op = st.session_state.get("wall_op_slider", 0.95)
 
-                # Base64 encode images to inject cleanly into HTML5 touch layout frame
                 wall_b64 = get_base64_image(wall_img)
                 decor_b64 = get_base64_image(decor_img)
-                
                 aspect_ratio = decor_img.height / decor_img.width
                 
-                # --- INTERACTIVE JAVASCRIPT/HTML5 TOUCH CANVAS COMPONENT ---
+                # --- HIGH-PERFORMANCE INTERACTIVE TOUCH/PINCH HTML5 CANVAS ---
                 html_code = f"""
-                <div style="position: relative; width: 100%; max-width: 100%; overflow: hidden; display: flex; justify-content: center;">
-                    <canvas id="canvas" style="max-height: 48vh; object-fit: contain; width: 100%; border-radius: 6px; background:#eee;"></canvas>
+                <div style="width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; display: flex; justify-content: center; align-items: center;">
+                    <canvas id="canvas" style="width: 100%; height: 45vh; object-fit: contain; background: #fafafa; border-radius: 8px;"></canvas>
                 </div>
                 <script>
                     const canvas = document.getElementById('canvas');
@@ -220,6 +217,8 @@ if uploaded_wall:
                     
                     let isDragging = false;
                     let startX, startY;
+                    let initTouchDist = 0;
+                    let initArtW = 0;
                     
                     function draw() {{
                         canvas.width = wallImg.width;
@@ -230,63 +229,87 @@ if uploaded_wall:
                         ctx.globalAlpha = 1.0;
                     }}
                     
-                    function getCoordinates(e) {{
+                    function getCoordinates(clientX, clientY) {{
                         const rect = canvas.getBoundingClientRect();
-                        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
                         return {{
                             x: ((clientX - rect.left) / rect.width) * canvas.width,
                             y: ((clientY - rect.top) / rect.height) * canvas.height
                         }};
                     }}
                     
-                    function startAction(e) {{
-                        const coord = getCoordinates(e);
+                    // --- MOUSE & SINGLE TOUCH DRAG HANDLING ---
+                    function startAction(clientX, clientY) {{
+                        const coord = getCoordinates(clientX, clientY);
                         if (coord.x >= art.x && coord.x <= art.x + art.w && coord.y >= art.y && coord.y <= art.y + art.h) {{
                             isDragging = true;
                             startX = coord.x - art.x;
                             startY = coord.y - art.y;
-                            if(e.cancelable) e.preventDefault();
                         }}
                     }}
                     
-                    function moveAction(e) {{
+                    function moveAction(clientX, clientY) {{
                         if (!isDragging) return;
-                        const coord = getCoordinates(e);
+                        const coord = getCoordinates(clientX, clientY);
                         art.x = coord.x - startX;
                         art.y = coord.y - startY;
                         draw();
-                        
-                        // Send new values back to Streamlit parameters silently
-                        window.parent.postMessage({{
-                            type: 'streamlit:setComponentValue',
-                            value: JSON.stringify({{x: Math.round(art.x), y: Math.round(art.y)}})
-                        }}, '*');
-                        if(e.cancelable) e.preventDefault();
                     }}
                     
-                    function stopAction() {{ isDragging = false; }}
+                    // --- PINCH TO ZOOM (MOBILE GESTURE) & MOUSE WHEEL RESIZING ---
+                    function getTouchDist(touches) {{
+                        const dx = touches[0].clientX - touches[1].clientX;
+                        const dy = touches[0].clientY - touches[1].clientY;
+                        return Math.sqrt(dx*dx + dy*dy);
+                    }}
+                    
+                    canvas.addEventListener('mousedown', (e) => startAction(e.clientX, e.clientY));
+                    window.addEventListener('mousemove', (e) => moveAction(e.clientX, e.clientY));
+                    window.addEventListener('mouseup', () => isDragging = false);
+                    
+                    canvas.addEventListener('touchstart', (e) => {{
+                        if (e.touches.length === 1) {{
+                            startAction(e.touches[0].clientX, e.touches[0].clientY);
+                        }} else if (e.touches.length === 2) {{
+                            isDragging = false; // Override drag mode
+                            initTouchDist = getTouchDist(e.touches);
+                            initArtW = art.w;
+                        }}
+                    }}, {{ passive: false }});
+                    
+                    window.addEventListener('touchmove', (e) => {{
+                        if (e.touches.length === 1 && isDragging) {{
+                            moveAction(e.touches[0].clientX, e.touches[0].clientY);
+                            if(e.cancelable) e.preventDefault();
+                        }} else if (e.touches.length === 2) {{
+                            const currentDist = getTouchDist(e.touches);
+                            const scale = currentDist / initTouchDist;
+                            art.w = Math.max(50, Math.min(wallImg.width, Math.round(initArtW * scale)));
+                            art.h = Math.round(art.w * {aspect_ratio});
+                            draw();
+                            if(e.cancelable) e.preventDefault();
+                        }}
+                    }}, {{ passive: false }});
+                    
+                    window.addEventListener('touchend', () => {{ isDragging = false; }});
+                    
+                    // Desktop Wheel Zoom Fallback
+                    canvas.addEventListener('wheel', (e) => {{
+                        e.preventDefault();
+                        const scaleFactor = e.deltaY < 0 ? 1.05 : 0.95;
+                        art.w = Math.max(50, Math.min(wallImg.width, Math.round(art.w * scaleFactor)));
+                        art.h = Math.round(art.w * {aspect_ratio});
+                        draw();
+                    }}, {{ passive: false }});
                     
                     wallImg.onload = () => {{ artImg.onload = () => {{ draw(); }}; }};
-                    
-                    // Mouse Listeners
-                    canvas.addEventListener('mousedown', startAction);
-                    window.addEventListener('mousemove', moveAction);
-                    window.addEventListener('mouseup', stopAction);
-                    
-                    // Mobile Touch Listeners 
-                    canvas.addEventListener('touchstart', startAction, {{ passive: false }});
-                    window.addEventListener('touchmove', moveAction, {{ passive: false }});
-                    window.addEventListener('touchend', stopAction);
                 </script>
                 """
                 
-                # Render interactive HTML window frame with custom bridge return communication
+                # Render inside Streamlit component layout view frame
                 import streamlit.components.v1 as components
-                response_data = components.html(html_code, height=380, scrolling=False)
+                components.html(html_code, height=420, scrolling=False)
                 
-                # Sync touch values back seamlessly into Streamlit tracking loop state
-                # Check for updates from window events, or fall back to sliders
+                # --- CONTROL SLIDERS DIRECTLY BELOW CANVAS ---
                 st.markdown("### ⚙️ 調整工具 / Position Controls")
                 st.markdown(f"**當前選定 / Selected:** `{st.session_state.selected_art_name}`")
                 
@@ -295,7 +318,7 @@ if uploaded_wall:
                 decor_w = st.slider("調整尺寸 (Width)", 50, wall_img.width, value=current_w, key="wall_w_slider")
                 opacity = st.slider("環境光線融和度 (Opacity)", 0.5, 1.0, value=current_op, step=0.05, key="wall_op_slider")
                 
-                # Standard Python Composite Processing for downscaled exports
+                # Backend calculation for rendering file downloads
                 decor_h = int(decor_w * aspect_ratio)
                 decor_resized = decor_img.resize((decor_w, decor_h), Image.Resampling.LANCZOS)
                 if opacity < 1.0:
