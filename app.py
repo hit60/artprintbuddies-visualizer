@@ -2,21 +2,25 @@ import io
 import os
 import cv2
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 import streamlit as st
 
 # --- 1. SECURITY & MEMORY SAFEGUARDS ---
-# Limit maximum decompression pixels to protect against "decompression bomb" DoS attacks
-Image.MAX_IMAGE_PIXELS = 40_000_000
+# Protect against Decompression Bomb DoS attacks
+MAX_PIXEL_COUNT = 40_000_000
+Image.MAX_IMAGE_PIXELS = MAX_PIXEL_COUNT
 
-# Set up page layout
+MAX_IMAGE_WIDTH = 1200
+MAX_UPLOAD_SIZE_MB = 3
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
 st.set_page_config(page_title="ArtPrintBuddies Visualizer", layout="wide")
 
-# Custom CSS to force clean mobile stacking and button hover actions
+# Custom CSS
 st.markdown(
     """
     <style>
-    /* Break side-by-side layout into single columns on small screen viewports */
     @media (max-width: 768px) {
         div[data-testid="stHorizontalBlock"] {
             flex-direction: column !important;
@@ -36,7 +40,6 @@ st.markdown(
         border: 2px solid #0066cc;
     }
     
-    /* Prominent text styling */
     div[data-element-to-test="stMarkdownContainer"] {
         font-weight: 500;
     }
@@ -44,6 +47,16 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
+# --- SESSION STATE NAVIGATION INITIALIZATION ---
+if "step" not in st.session_state:
+    st.session_state.step = 1
+if "sanitized_wall_img" not in st.session_state:
+    st.session_state.sanitized_wall_img = None
+if "selected_art_path" not in st.session_state:
+    st.session_state.selected_art_path = None
+if "selected_art_name" not in st.session_state:
+    st.session_state.selected_art_name = None
 
 # --- BRANDING & SIDEBAR COMPANY DETAILS ---
 with st.sidebar:
@@ -55,14 +68,16 @@ with st.sidebar:
     st.write("Upload a photo of your room to see how our decor looks on your wall!")
     st.markdown("---")
 
+    if st.session_state.step == 2:
+        if st.button("⬅️ 重選牆面或畫作 / Back to Step 1", use_container_width=True):
+            st.session_state.step = 1
+            st.rerun()
+
 st.title("🎨 ArtPrintBuddies Wall Art Visualizer")
-st.write("模擬您的專屬藝術牆面 | Preview your custom prints instantly.")
 
-MAX_IMAGE_WIDTH = 1200
-MAX_UPLOAD_SIZE_MB = 3
-MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
-
-
+# ==============================================================================
+# 2. HELPER UTILITIES & SECURITY FUNCTIONS
+# ==============================================================================
 @st.cache_data
 def load_classified_catalog():
     return {
@@ -133,118 +148,145 @@ def load_classified_catalog():
         },
     }
 
+def sanitize_and_validate_path(base_dir: str, target_path: str) -> bool:
+    """Prevents Path Traversal vulnerability by enforcing target directory boundaries."""
+    try:
+        resolved_base = os.path.realpath(base_dir)
+        resolved_target = os.path.realpath(target_path)
+        return resolved_target.startswith(resolved_base)
+    except Exception:
+        return False
 
-# --- MAIN SCREEN: UPLOAD WALL ---
-uploaded_wall = st.file_uploader(
-    "1. 上傳牆面照片 / Upload your wall photo",
-    type=["jpg", "jpeg", "png", "webp"],
-    max_upload_size=3,  # Sets 3MB limit in UI widget
-)
-st.caption("🔒 **隱私安全保障 / Your Privacy Matters:** 上傳的照片僅用於即時效果預覽。")
-
-if uploaded_wall:
-    # --- 2. EARLY FILE SIZE SAFETY CHECK ---
-    if uploaded_wall.size > MAX_UPLOAD_SIZE_BYTES:
+def validate_uploaded_file(file_obj) -> bool:
+    """Checks size limit and valid extension prior to processing."""
+    if file_obj.size > MAX_UPLOAD_SIZE_BYTES:
         st.error(
             f"⚠️ 檔案過大 / File too large! "
-            f"請上傳小於 {MAX_UPLOAD_SIZE_MB}MB 的照片 (您的檔案大小: {uploaded_wall.size / (1024 * 1024):.2f}MB)。"
+            f"請上傳小於 {MAX_UPLOAD_SIZE_MB}MB 的照片 (您的檔案大小: {file_obj.size / (1024 * 1024):.2f}MB)。"
         )
-        st.stop()
+        return False
 
-    try:
-        raw_wall_img = Image.open(uploaded_wall).convert("RGBA")
-        wall_img = ImageOps.exif_transpose(raw_wall_img)
-    except Exception:
-        st.error("⚠️ 無法讀取該圖片檔，請上傳有效的 JPG、PNG 或 WebP 圖片。")
-        st.stop()
+    ext = os.path.splitext(file_obj.name)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        st.error("❌ 無效的檔案類型 / Invalid file type. Only JPG, PNG, and WebP are allowed.")
+        return False
 
-    # Scale width down gently to save memory while preserving layout
-    if wall_img.width > MAX_IMAGE_WIDTH:
-        w_percent = MAX_IMAGE_WIDTH / float(wall_img.width)
-        h_size = int(float(wall_img.height) * float(w_percent))
-        wall_img = wall_img.resize(
-            (MAX_IMAGE_WIDTH, h_size), Image.Resampling.LANCZOS
-        )
+    return True
 
-    col_gallery, col_canvas = st.columns([1, 1])
+# ==============================================================================
+# 3. STEP 1 PAGE: UPLOAD WALL & SELECT ART
+# ==============================================================================
+if st.session_state.step == 1:
+    st.write("步驟 1：上傳牆面照片，並選擇喜歡的藝術款式 | Step 1: Upload room photo & choose art piece.")
 
-    with col_gallery:
-        st.subheader("🎨 選擇藝術款式 / Choose Art Style")
-        full_catalog = load_classified_catalog()
-        categories = list(full_catalog.keys())
+    uploaded_wall = st.file_uploader(
+        "1. 上傳牆面照片 / Upload your wall photo",
+        type=["jpg", "jpeg", "png", "webp"],
+    )
+    st.caption("🔒 **隱私安全保障 / Your Privacy Matters:** 上傳的照片僅用於即時效果預覽。")
 
-        if "selected_art_path" not in st.session_state:
-            st.session_state.selected_art_path = None
-        if "selected_art_name" not in st.session_state:
-            st.session_state.selected_art_name = None
+    if uploaded_wall and validate_uploaded_file(uploaded_wall):
+        try:
+            raw_wall_img = Image.open(uploaded_wall).convert("RGBA")
+            wall_img = ImageOps.exif_transpose(raw_wall_img)
 
-        tabs = st.tabs(categories)
-        for i, cat_name in enumerate(categories):
-            with tabs[i]:
-                sub_catalog = full_catalog[cat_name]
-                if not sub_catalog:
-                    st.info("🎨 即將推出！Coming Soon.")
-                else:
-                    items = list(sub_catalog.items())
-                    for row_idx in range(0, len(items), 3):
-                        row_items = items[row_idx : row_idx + 3]
-                        cols = st.columns(3)
-                        for col_idx, (art_name, art_path) in enumerate(row_items):
-                            with cols[col_idx]:
-                                if os.path.exists(art_path):
-                                    # Pass file path directly to st.image to prevent RAM leaks
-                                    st.image(
-                                        art_path, use_container_width=True
-                                    )
-                                    button_label = (
-                                        f"✨ {art_name[:12]}..."
-                                        if len(art_name) > 12
-                                        else f"✨ {art_name}"
-                                    )
-                                    if st.button(
-                                        button_label,
-                                        key=f"btn_{cat_name}_{art_path}_{row_idx}_{col_idx}",
-                                        use_container_width=True,
-                                    ):
-                                        st.session_state.selected_art_path = art_path
-                                        st.session_state.selected_art_name = art_name
-                                        st.rerun()
+            # Strip EXIF metadata to maintain user privacy
+            clean_wall_data = list(wall_img.getdata())
+            sanitized_wall = Image.new(wall_img.mode, wall_img.size)
+            sanitized_wall.putdata(clean_wall_data)
 
-    with col_canvas:
-        st.subheader("👁️ 預覽與調整 / Preview & Adjust")
+            # Resize down to prevent memory strain
+            if sanitized_wall.width > MAX_IMAGE_WIDTH:
+                w_percent = MAX_IMAGE_WIDTH / float(sanitized_wall.width)
+                h_size = int(float(sanitized_wall.height) * float(w_percent))
+                sanitized_wall = sanitized_wall.resize(
+                    (MAX_IMAGE_WIDTH, h_size), Image.Resampling.LANCZOS
+                )
 
-        if not st.session_state.selected_art_path:
-            st.image(wall_img, use_container_width=True)
-            st.info("👈 請在左側選單點擊裝飾畫圖片，以進行效果預覽！")
-        else:
-            decor_path = st.session_state.selected_art_path
-            if os.path.exists(decor_path):
-                with Image.open(decor_path) as d_img:
-                    decor_img = d_img.convert("RGBA")
+            st.session_state.sanitized_wall_img = sanitized_wall
 
-                st.write("🛠️ **調整畫作位置與大小 / Controls:**")
+            st.markdown("---")
+            st.subheader("2. 選擇藝術款式 / Choose Art Style")
 
-                col_x, col_y = st.columns(2)
-                with col_x:
-                    pos_x = st.slider(
-                        "左右位置 (X Position)",
-                        0,
-                        wall_img.width,
-                        int(wall_img.width / 3),
-                    )
-                with col_y:
-                    pos_y = st.slider(
-                        "上下位置 (Y Position)",
-                        0,
-                        wall_img.height,
-                        int(wall_img.height / 3),
-                    )
+            full_catalog = load_classified_catalog()
+            categories = list(full_catalog.keys())
+            tabs = st.tabs(categories)
 
+            for i, cat_name in enumerate(categories):
+                with tabs[i]:
+                    sub_catalog = full_catalog[cat_name]
+                    if not sub_catalog:
+                        st.info("🎨 即將推出！Coming Soon.")
+                    else:
+                        items = list(sub_catalog.items())
+                        for row_idx in range(0, len(items), 3):
+                            row_items = items[row_idx : row_idx + 3]
+                            cols = st.columns(3)
+                            for col_idx, (art_name, art_path) in enumerate(row_items):
+                                with cols[col_idx]:
+                                    if sanitize_and_validate_path("images", art_path) and os.path.exists(art_path):
+                                        st.image(art_path, use_container_width=True)
+                                        
+                                        button_label = (
+                                            f"✨ 選擇 {art_name[:12]}..."
+                                            if len(art_name) > 12
+                                            else f"✨ 選擇 {art_name}"
+                                        )
+                                        
+                                        # On click, store state and trigger page transition
+                                        if st.button(
+                                            button_label,
+                                            key=f"btn_{cat_name}_{art_path}_{row_idx}_{col_idx}",
+                                            use_container_width=True,
+                                        ):
+                                            st.session_state.selected_art_path = art_path
+                                            st.session_state.selected_art_name = art_name
+                                            st.session_state.step = 2
+                                            st.rerun()
+
+        except Exception:
+            st.error("⚠️ 無法讀取該圖片檔，請上傳有效的 JPG、PNG 或 WebP 圖片。")
+
+# ==============================================================================
+# 4. STEP 2 PAGE: PREVIEW & RESIZE ADJUSTMENT
+# ==============================================================================
+elif st.session_state.step == 2:
+    st.write("步驟 2：調整畫作位置與尺寸並預覽效果 | Step 2: Adjust position, size, and preview.")
+
+    wall_img = st.session_state.sanitized_wall_img
+    decor_path = st.session_state.selected_art_path
+
+    if wall_img and decor_path and sanitize_and_validate_path("images", decor_path) and os.path.exists(decor_path):
+        try:
+            with Image.open(decor_path) as d_img:
+                decor_img = d_img.convert("RGBA")
+
+            col_controls, col_preview = st.columns([1, 2])
+
+            with col_controls:
+                st.subheader("🛠️ 調整選項目錄 / Controls")
+                st.markdown(f"**當前選擇 / Art Selected:**\n`{st.session_state.selected_art_name}`")
+                st.markdown("---")
+
+                pos_x = st.slider(
+                    "左右位置 (X Position)",
+                    0,
+                    wall_img.width,
+                    int(wall_img.width / 3),
+                )
+                pos_y = st.slider(
+                    "上下位置 (Y Position)",
+                    0,
+                    wall_img.height,
+                    int(wall_img.height / 3),
+                )
                 scale_percent = st.slider(
                     "尺寸大小 (Scale Size %)", 10, 100, 30
                 )
 
-                # Ensure positive min size of at least 1px
+                st.markdown("---")
+
+                # Dimensional calculations
                 new_w = max(1, int(wall_img.width * (scale_percent / 100.0)))
                 aspect_ratio = decor_img.height / decor_img.width
                 new_h = max(1, int(new_w * aspect_ratio))
@@ -254,7 +296,7 @@ if uploaded_wall:
                 )
                 combined_preview = wall_img.copy()
 
-                # --- 3. BOUNDARY & CROP SAFEGUARDS ---
+                # Boundary & crop calculations
                 x_start = max(0, pos_x)
                 y_start = max(0, pos_y)
                 x_end = min(wall_img.width, x_start + new_w)
@@ -270,11 +312,6 @@ if uploaded_wall:
                     combined_preview.alpha_composite(
                         cropped_decor, (x_start, y_start)
                     )
-
-                st.image(combined_preview, use_container_width=True)
-                st.markdown(
-                    f"**當前選定 / Selected:** `{st.session_state.selected_art_name}`"
-                )
 
                 img_buffer = io.BytesIO()
                 final_rgb = combined_preview.convert("RGB")
@@ -292,13 +329,23 @@ if uploaded_wall:
 
                 st.write("")
                 if st.button(
-                    "🔄 試試其他牆面 / Try Another Photo",
+                    "🔄 重選牆面或畫作 / Back to Step 1",
                     use_container_width=True,
                 ):
-                    for key in ["selected_art_path", "selected_art_name"]:
-                        if key in st.session_state:
-                            del st.session_state[key]
+                    st.session_state.step = 1
                     st.rerun()
+
+            with col_preview:
+                st.subheader("👁️ 牆面預覽 / Wall Preview")
+                st.image(combined_preview, use_container_width=True)
+
+        except Exception:
+            st.error("⚠️ 預覽時發生錯誤，請稍後再試。An unexpected error occurred during preview.")
+    else:
+        st.warning("⚠️ 數據遺失，請返回第一步上傳照片。Data missing, please go back to step 1.")
+        if st.button("返回第一步 / Back to Step 1"):
+            st.session_state.step = 1
+            st.rerun()
 
 # --- FOOTER ---
 st.markdown("---")
