@@ -6,7 +6,6 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 import streamlit as st
 
 # --- 1. SECURITY & MEMORY SAFEGUARDS ---
-# Protect against Decompression Bomb DoS attacks
 MAX_PIXEL_COUNT = 40_000_000
 Image.MAX_IMAGE_PIXELS = MAX_PIXEL_COUNT
 
@@ -17,31 +16,34 @@ ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 st.set_page_config(page_title="ArtPrintBuddies Visualizer", layout="wide")
 
-# Custom CSS
+# Custom CSS focused on mobile height-compactness
 st.markdown(
     """
     <style>
-    @media (max-width: 768px) {
-        div[data-testid="stHorizontalBlock"] {
-            flex-direction: column !important;
-        }
-        div[data-testid="column"] {
-            width: 100% !important;
-        }
+    /* Compact padding to reduce scrolling on mobile */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
     }
     
-    div[data-testid="stHorizontalBlock"] button {
-        border-radius: 8px;
-        padding: 8px;
-        transition: transform 0.2s;
-    }
-    div[data-testid="stHorizontalBlock"] button:hover {
-        transform: scale(1.02);
-        border: 2px solid #0066cc;
+    /* Reduce margins around sliders and header elements */
+    div[data-testid="stSlider"] {
+        margin-bottom: -15px;
     }
     
-    div[data-element-to-test="stMarkdownContainer"] {
-        font-weight: 500;
+    div[data-testid="stHorizontalBlock"] {
+        align-items: center;
+    }
+
+    /* Keep side-by-side columns intact on small screens for position controls */
+    div[data-testid="column"] {
+        padding: 0 4px !important;
+    }
+    
+    button {
+        border-radius: 8px !important;
     }
     </style>
 """,
@@ -73,7 +75,7 @@ with st.sidebar:
             st.session_state.step = 1
             st.rerun()
 
-st.title("🎨 ArtPrintBuddies Wall Art Visualizer")
+st.title("🎨 ArtPrintBuddies Visualizer")
 
 # ==============================================================================
 # 2. HELPER UTILITIES & SECURITY FUNCTIONS
@@ -149,7 +151,6 @@ def load_classified_catalog():
     }
 
 def sanitize_and_validate_path(base_dir: str, target_path: str) -> bool:
-    """Prevents Path Traversal vulnerability by enforcing target directory boundaries."""
     try:
         resolved_base = os.path.realpath(base_dir)
         resolved_target = os.path.realpath(target_path)
@@ -158,7 +159,6 @@ def sanitize_and_validate_path(base_dir: str, target_path: str) -> bool:
         return False
 
 def validate_uploaded_file(file_obj) -> bool:
-    """Checks size limit and valid extension prior to processing."""
     if file_obj.size > MAX_UPLOAD_SIZE_BYTES:
         st.error(
             f"⚠️ 檔案過大 / File too large! "
@@ -190,12 +190,10 @@ if st.session_state.step == 1:
             raw_wall_img = Image.open(uploaded_wall).convert("RGBA")
             wall_img = ImageOps.exif_transpose(raw_wall_img)
 
-            # Strip EXIF metadata to maintain user privacy
             clean_wall_data = list(wall_img.getdata())
             sanitized_wall = Image.new(wall_img.mode, wall_img.size)
             sanitized_wall.putdata(clean_wall_data)
 
-            # Resize down to prevent memory strain
             if sanitized_wall.width > MAX_IMAGE_WIDTH:
                 w_percent = MAX_IMAGE_WIDTH / float(sanitized_wall.width)
                 h_size = int(float(sanitized_wall.height) * float(w_percent))
@@ -233,7 +231,6 @@ if st.session_state.step == 1:
                                             else f"✨ 選擇 {art_name}"
                                         )
                                         
-                                        # On click, store state and trigger page transition
                                         if st.button(
                                             button_label,
                                             key=f"btn_{cat_name}_{art_path}_{row_idx}_{col_idx}",
@@ -248,11 +245,9 @@ if st.session_state.step == 1:
             st.error("⚠️ 無法讀取該圖片檔，請上傳有效的 JPG、PNG 或 WebP 圖片。")
 
 # ==============================================================================
-# 4. STEP 2 PAGE: PREVIEW & RESIZE ADJUSTMENT
+# 4. STEP 2 PAGE: COMPACT PREVIEW & SIDE-BY-SIDE CONTROLS
 # ==============================================================================
 elif st.session_state.step == 2:
-    st.write("步驟 2：調整畫作位置與尺寸並預覽效果 | Step 2: Adjust position, size, and preview.")
-
     wall_img = st.session_state.sanitized_wall_img
     decor_path = st.session_state.selected_art_path
 
@@ -261,83 +256,70 @@ elif st.session_state.step == 2:
             with Image.open(decor_path) as d_img:
                 decor_img = d_img.convert("RGBA")
 
-            col_controls, col_preview = st.columns([1, 2])
-
-            with col_controls:
-                st.subheader("🛠️ 調整選項目錄 / Controls")
-                st.markdown(f"**當前選擇 / Art Selected:**\n`{st.session_state.selected_art_name}`")
-                st.markdown("---")
-
+            # --- 1. CONTROLS CONTAINER (Placed above for compact viewport) ---
+            # Side-by-side position sliders
+            col_x, col_y = st.columns(2)
+            with col_x:
                 pos_x = st.slider(
-                    "左右位置 (X Position)",
+                    "↔️ 左右 (X)",
                     0,
                     wall_img.width,
                     int(wall_img.width / 3),
                 )
+            with col_y:
                 pos_y = st.slider(
-                    "上下位置 (Y Position)",
+                    "↕️ 上下 (Y)",
                     0,
                     wall_img.height,
                     int(wall_img.height / 3),
                 )
-                scale_percent = st.slider(
-                    "尺寸大小 (Scale Size %)", 10, 100, 30
-                )
 
-                st.markdown("---")
+            # Full width scale slider
+            scale_percent = st.slider("🔍 尺寸 (Size %)", 10, 100, 30)
 
-                # Dimensional calculations
-                new_w = max(1, int(wall_img.width * (scale_percent / 100.0)))
-                aspect_ratio = decor_img.height / decor_img.width
-                new_h = max(1, int(new_w * aspect_ratio))
+            # --- 2. CALCULATE COMPOSITE IMAGE ---
+            new_w = max(1, int(wall_img.width * (scale_percent / 100.0)))
+            aspect_ratio = decor_img.height / decor_img.width
+            new_h = max(1, int(new_w * aspect_ratio))
 
-                resized_decor = decor_img.resize(
-                    (new_w, new_h), Image.Resampling.LANCZOS
-                )
-                combined_preview = wall_img.copy()
+            resized_decor = decor_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            combined_preview = wall_img.copy()
 
-                # Boundary & crop calculations
-                x_start = max(0, pos_x)
-                y_start = max(0, pos_y)
-                x_end = min(wall_img.width, x_start + new_w)
-                y_end = min(wall_img.height, y_start + new_h)
+            x_start = max(0, pos_x)
+            y_start = max(0, pos_y)
+            x_end = min(wall_img.width, x_start + new_w)
+            y_end = min(wall_img.height, y_start + new_h)
 
-                decor_w_crop = x_end - x_start
-                decor_h_crop = y_end - y_start
+            decor_w_crop = x_end - x_start
+            decor_h_crop = y_end - y_start
 
-                if decor_w_crop > 0 and decor_h_crop > 0:
-                    cropped_decor = resized_decor.crop(
-                        (0, 0, decor_w_crop, decor_h_crop)
-                    )
-                    combined_preview.alpha_composite(
-                        cropped_decor, (x_start, y_start)
-                    )
+            if decor_w_crop > 0 and decor_h_crop > 0:
+                cropped_decor = resized_decor.crop((0, 0, decor_w_crop, decor_h_crop))
+                combined_preview.alpha_composite(cropped_decor, (x_start, y_start))
 
-                img_buffer = io.BytesIO()
-                final_rgb = combined_preview.convert("RGB")
-                final_rgb.save(img_buffer, format="JPEG", quality=95)
-                byte_data = img_buffer.getvalue()
+            # --- 3. LIVE IMAGE PREVIEW ---
+            st.image(combined_preview, use_container_width=True)
 
+            # --- 4. ACTION BUTTONS (INLINE HORIZONTAL) ---
+            img_buffer = io.BytesIO()
+            final_rgb = combined_preview.convert("RGB")
+            final_rgb.save(img_buffer, format="JPEG", quality=95)
+            byte_data = img_buffer.getvalue()
+
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
                 st.download_button(
-                    label="💾 下載我的設計 / Download Room Design",
+                    label="💾 下載設計 (Download)",
                     data=byte_data,
                     file_name="artprintbuddies_design.jpg",
                     mime="image/jpeg",
                     use_container_width=True,
                     type="primary",
                 )
-
-                st.write("")
-                if st.button(
-                    "🔄 重選牆面或畫作 / Back to Step 1",
-                    use_container_width=True,
-                ):
+            with btn_col2:
+                if st.button("🔄 重選 (Back)", use_container_width=True):
                     st.session_state.step = 1
                     st.rerun()
-
-            with col_preview:
-                st.subheader("👁️ 牆面預覽 / Wall Preview")
-                st.image(combined_preview, use_container_width=True)
 
         except Exception:
             st.error("⚠️ 預覽時發生錯誤，請稍後再試。An unexpected error occurred during preview.")
@@ -349,16 +331,14 @@ elif st.session_state.step == 2:
 
 # --- FOOTER ---
 st.markdown("---")
-col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
-with col_btn:
-    st.link_button(
-        "🛍️ 點擊前往網店選購 / Visit Our Shop",
-        "https://artprintbuddies.myshopify.com/",
-        use_container_width=True,
-    )
+st.link_button(
+    "🛍️ 點擊前往網店選購 / Visit Our Shop",
+    "https://artprintbuddies.myshopify.com/",
+    use_container_width=True,
+)
 
 st.markdown(
-    "<p style='text-align: center; color: gray; font-size: 0.8rem; margin-top: 15px;'>"
+    "<p style='text-align: center; color: gray; font-size: 0.8rem; margin-top: 10px;'>"
     "© 2026 ArtPrintBuddies 圖畫裝飾 (Tung Fong Printing Service 東方晒圖). All Rights Reserved."
     "</p>",
     unsafe_allow_html=True,
