@@ -20,7 +20,6 @@ st.set_page_config(page_title="ArtPrintBuddies Visualizer", layout="wide")
 st.markdown(
     """
     <style>
-    /* Compact padding to reduce scrolling on mobile */
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 1rem !important;
@@ -28,16 +27,14 @@ st.markdown(
         padding-right: 0.8rem !important;
     }
     
-    /* Reduce margins around sliders and header elements */
     div[data-testid="stSlider"] {
-        margin-bottom: -15px;
+        margin-bottom: -10px;
     }
     
     div[data-testid="stHorizontalBlock"] {
         align-items: center;
     }
 
-    /* Keep side-by-side columns intact on small screens for position controls */
     div[data-testid="column"] {
         padding: 0 4px !important;
     }
@@ -50,7 +47,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- SESSION STATE NAVIGATION INITIALIZATION ---
+# --- SESSION STATE INITIALIZATION ---
 if "step" not in st.session_state:
     st.session_state.step = 1
 if "sanitized_wall_img" not in st.session_state:
@@ -60,7 +57,7 @@ if "selected_art_path" not in st.session_state:
 if "selected_art_name" not in st.session_state:
     st.session_state.selected_art_name = None
 
-# --- BRANDING & SIDEBAR COMPANY DETAILS ---
+# --- BRANDING & SIDEBAR ---
 with st.sidebar:
     st.markdown("# 🖼️ ArtPrintBuddies")
     st.markdown("### 圖畫裝飾")
@@ -78,7 +75,7 @@ with st.sidebar:
 st.title("🎨 ArtPrintBuddies Visualizer")
 
 # ==============================================================================
-# 2. HELPER UTILITIES & SECURITY FUNCTIONS
+# 2. HELPER UTILITIES
 # ==============================================================================
 @st.cache_data
 def load_classified_catalog():
@@ -173,6 +170,33 @@ def validate_uploaded_file(file_obj) -> bool:
 
     return True
 
+def draw_option_label_on_image(pil_image: Image.Image, text: str) -> Image.Image:
+    """Draws a neat dark overlay box with white text in the top-left corner."""
+    img_cv = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGBA2BGRA)
+    
+    label_text = f"Art: {text}"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = max(0.5, img_cv.shape[1] / 1500.0)
+    thickness = max(1, int(font_scale * 2))
+    
+    (text_w, text_h), baseline = cv2.getTextSize(label_text, font, font_scale, thickness)
+    
+    # Overlay box dimensions
+    padding = 10
+    box_x1, box_y1 = 15, 15
+    box_x2, box_y2 = box_x1 + text_w + (padding * 2), box_y1 + text_h + (padding * 2)
+    
+    # Create semi-transparent dark rectangle background
+    overlay = img_cv.copy()
+    cv2.rectangle(overlay, (box_x1, box_y1), (box_x2, box_y2), (0, 0, 0, 180), -1)
+    cv2.addWeighted(overlay, 0.6, img_cv, 0.4, 0, img_cv)
+    
+    # Draw text inside box
+    text_org = (box_x1 + padding, box_y1 + text_h + padding - 2)
+    cv2.putText(img_cv, label_text, text_org, font, font_scale, (255, 255, 255, 255), thickness, cv2.LINE_AA)
+    
+    return Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGRA2RGBA))
+
 # ==============================================================================
 # 3. STEP 1 PAGE: UPLOAD WALL & SELECT ART
 # ==============================================================================
@@ -245,7 +269,7 @@ if st.session_state.step == 1:
             st.error("⚠️ 無法讀取該圖片檔，請上傳有效的 JPG、PNG 或 WebP 圖片。")
 
 # ==============================================================================
-# 4. STEP 2 PAGE: COMPACT PREVIEW & SIDE-BY-SIDE CONTROLS
+# 4. STEP 2 PAGE: COMPACT PREVIEW & INSTRUCTIONS
 # ==============================================================================
 elif st.session_state.step == 2:
     wall_img = st.session_state.sanitized_wall_img
@@ -256,28 +280,34 @@ elif st.session_state.step == 2:
             with Image.open(decor_path) as d_img:
                 decor_img = d_img.convert("RGBA")
 
-            # --- 1. CONTROLS CONTAINER (Placed above for compact viewport) ---
-            # Side-by-side position sliders
+            # --- 1. CONTROLS WITH ENGLISH & CHINESE INSTRUCTIONS ---
             col_x, col_y = st.columns(2)
             with col_x:
                 pos_x = st.slider(
-                    "↔️ 左右 (X)",
+                    "↔️ 左右位置 (X Position)",
                     0,
                     wall_img.width,
                     int(wall_img.width / 3),
+                    help="Drag left/right to shift artwork horizontally. 左右拖動可移動畫作水平位置。"
                 )
             with col_y:
                 pos_y = st.slider(
-                    "↕️ 上下 (Y)",
+                    "↕️ 上下位置 (Y Position)",
                     0,
                     wall_img.height,
                     int(wall_img.height / 3),
+                    help="Drag up/down to adjust artwork height on wall. 上下拖動可調整畫作掛牆高度。"
                 )
 
-            # Full width scale slider
-            scale_percent = st.slider("🔍 尺寸 (Size %)", 10, 100, 30)
+            scale_percent = st.slider(
+                "🔍 畫作尺寸 (Artwork Size %)", 
+                10, 
+                100, 
+                30,
+                help="Slide to make artwork larger or smaller. 拖動滑塊即可放大或縮小畫作尺寸。"
+            )
 
-            # --- 2. CALCULATE COMPOSITE IMAGE ---
+            # --- 2. COMPOSITE CALCULATION ---
             new_w = max(1, int(wall_img.width * (scale_percent / 100.0)))
             aspect_ratio = decor_img.height / decor_img.width
             new_h = max(1, int(new_w * aspect_ratio))
@@ -297,21 +327,26 @@ elif st.session_state.step == 2:
                 cropped_decor = resized_decor.crop((0, 0, decor_w_crop, decor_h_crop))
                 combined_preview.alpha_composite(cropped_decor, (x_start, y_start))
 
-            # --- 3. LIVE IMAGE PREVIEW ---
-            st.image(combined_preview, use_container_width=True)
+            # --- 3. OVERLAY OPTION NAME IN CORNER ---
+            final_preview = draw_option_label_on_image(
+                combined_preview, 
+                st.session_state.selected_art_name
+            )
 
-            # --- 4. ACTION BUTTONS (INLINE HORIZONTAL) ---
+            st.image(final_preview, use_container_width=True)
+
+            # --- 4. ACTION BUTTONS ---
             img_buffer = io.BytesIO()
-            final_rgb = combined_preview.convert("RGB")
+            final_rgb = final_preview.convert("RGB")
             final_rgb.save(img_buffer, format="JPEG", quality=95)
             byte_data = img_buffer.getvalue()
 
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 st.download_button(
-                    label="💾 下載設計 (Download)",
+                    label="💾 下載設計 (Download Design)",
                     data=byte_data,
-                    file_name="artprintbuddies_design.jpg",
+                    file_name=f"design_art_{st.session_state.selected_art_name}.jpg",
                     mime="image/jpeg",
                     use_container_width=True,
                     type="primary",
