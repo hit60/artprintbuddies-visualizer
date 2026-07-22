@@ -171,10 +171,11 @@ def validate_uploaded_file(file_obj) -> bool:
     return True
 
 def draw_option_label_on_image(pil_image: Image.Image, text: str) -> Image.Image:
-    """Draws a neat dark overlay box with white text in the top-left corner."""
+    """Draws a neat dark overlay box with 'Option /選項: (name)' text in the top-left corner."""
     img_cv = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGBA2BGRA)
     
-    label_text = f"Art: {text}"
+    # Update the label format here
+    label_text = f"Option /選項: {text}"
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = max(0.5, img_cv.shape[1] / 1500.0)
     thickness = max(1, int(font_scale * 2))
